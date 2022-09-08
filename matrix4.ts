@@ -1,3 +1,5 @@
+// use code from cesium.js-Cartesian3
+// https://github.com/CesiumGS/cesium/blob/1.62/Source/Core/Cartesian3.js
 class C3 {
   x:number
   y:number
@@ -8,18 +10,63 @@ class C3 {
     this.z = z
   }
 
-  static subtract(left: C3, right: C3, result?: C3): C3 {
-    if(!result) {
-      result = new C3()
-    }
+  static subtract(left: C3, right: C3, result: C3 = new C3()): C3 {
     result.x = left.x - right.x;
     result.y = left.y - right.y;
     result.z = left.z - right.z;
     return result;
   }
 
+  static add(left: C3, right: C3, result: C3 = new C3()) {
+    result.x = left.x + right.x;
+    result.y = left.y + right.y;
+    result.z = left.z + right.z;
+    return result;
+  }
+
+  static multiplyByScalar(c3: C3, scalar: number, result: C3 = new C3()): C3 {
+    result.x = c3.x * scalar;
+    result.y = c3.y * scalar;
+    result.z = c3.z * scalar;
+    return result;
+  }
+
   static dot(left: C3, right: C3): number {
     return left.x * right.x + left.y * right.y + left.z * right.z;
+  }
+
+  static magnitudeSquared(c3: C3): number {
+    return c3.x * c3.x + c3.y * c3.y + c3.z * c3.z;
+  }
+  
+  static magnitude(c3: C3): number {
+    return Math.sqrt(C3.magnitudeSquared(c3));
+  }
+
+  static distance(left: C3, right:C3): number {
+    let distanceScratch = new C3();
+    C3.subtract(left, right, distanceScratch);
+    return C3.magnitude(distanceScratch);
+  }
+
+  static distanceSquared(left: C3, right:C3): number {
+    let distanceScratch = new C3();
+    C3.subtract(left, right, distanceScratch);
+    return C3.magnitudeSquared(distanceScratch);
+  }
+
+  static normalize(c3: C3, result: C3 = new C3()) {
+    var magnitude = C3.magnitude(c3);
+
+    result.x = c3.x / magnitude;
+    result.y = c3.y / magnitude;
+    result.z = c3.z / magnitude;
+ 
+    if (isNaN(result.x) || isNaN(result.y) || isNaN(result.z)) {
+        throw new Error('normalized result is not a number');
+    }
+
+    return result;
   }
 }
 
@@ -37,6 +84,14 @@ function color(hex: string): Array<number> {
   c.push(255)
   return c
 }
+function colorByScalar(color: Array<number>, scalar: number): Array<number> {
+  let new_color = []
+  new_color[0] = color[0] * scalar
+  new_color[1] = color[1] * scalar
+  new_color[2] = color[2] * scalar
+  new_color[3] = color[3]
+  return new_color
+}
 
 
 class Sphere {
@@ -50,6 +105,12 @@ class Sphere {
   }
 }
 
+type Light = {
+  type: string,
+  intensity: number,
+  position?: C3,
+  direction?: C3
+}
 
 class Matrix4 {
   canvas: HTMLCanvasElement
@@ -60,6 +121,8 @@ class Matrix4 {
   vh: number
   d: number
   scene: Array <Sphere>
+  light: Light[]
+  canvasBuffer: ImageData
   constructor(id: string) {
     let container = document.querySelector('#' + id)
     if(!container) {
@@ -74,7 +137,7 @@ class Matrix4 {
     this.canvas = canvas
     this.container = container
     this.context = ctx
-
+    this.canvasBuffer = ctx.getImageData(0, 0, width, height)
     this.cameraPosition = new C3()
 
     this.vw = 1.0
@@ -84,7 +147,25 @@ class Matrix4 {
     this.scene = [
       new Sphere(new C3(0, -1, 3), 1, color('#ff0000')),
       new Sphere(new C3(2, 0, 4), 1, color('#0000ff')),
-      new Sphere(new C3(-2, 0, 4), 1, color('#00ff00'))
+      new Sphere(new C3(-2, 0, 4), 1, color('#00ff00')),
+      new Sphere(new C3(0, -5001, 0), 5000, color('#ffff00'))
+    ]
+
+    this.light = [
+      {
+        type: "ambient",
+        intensity: 0.2
+      },
+      {
+        type: "point",
+        intensity: 0.6,
+        position: new C3(2, 1, 0)
+      },
+      {
+        type: "directional",
+        intensity: 0.2,
+        direction: new C3(1, 4, 4)
+      }
     ]
     
   }
@@ -96,17 +177,37 @@ class Matrix4 {
   }
 
   putPixel(x: number, y: number, color: Array<number> = []) {
-    let cw_half = Math.floor(this.cw / 2)
-    let cy_half = Math.floor(this.ch / 2)
-    if(x < -cw_half || x > cw_half || y < -cy_half || y > cy_half) {
-      // console.log(cw_half, cy_half, x, y)
+    x = this.cw / 2 + x
+    y = this.ch / 2 - y - 1
+    if(x < 0 || x >= this.cw || y < 0 || y >= this.ch) {
       return
     }
-    let sx = cw_half + x
-    let sy = cy_half - y
-    let uintc8 = new Uint8ClampedArray(color);
-    let imageData = new ImageData(uintc8, 1, 1)
-    this.context.putImageData(imageData, sx, sy);
+    let offset = this.canvasBuffer.width * 4 * y + 4 * x
+    this.canvasBuffer.data[offset++] = color[0] // r
+    this.canvasBuffer.data[offset++] = color[1] // g
+    this.canvasBuffer.data[offset++] = color[2] // b
+    this.canvasBuffer.data[offset++] = color[3] // alpha
+  }
+
+  computeLighting(point: C3, n: C3): number {
+    let i = 0.0
+    this.light.forEach(light => {
+      if(light.type === "ambient") {
+        i += light.intensity
+      }else {
+        let l: C3
+        if(light.type === "point") {
+          l = C3.subtract(light.position, point)
+        }else {
+          l = light.direction
+        }
+        let cos_a = C3.dot(n, l)
+        if(cos_a > 0) {
+          i += light.intensity * cos_a / (C3.magnitude(n) * C3.magnitude(l))
+        }
+      }
+    })
+    return i
   }
 
   canvasToViewport(x: number, y: number): C3 {
@@ -130,7 +231,10 @@ class Matrix4 {
     if(!closest_sphere) {
       return color('#fff')
     }else {
-      return closest_sphere.color
+      let point = C3.add(this.cameraPosition, C3.multiplyByScalar(direction, closest_t))
+      let n = C3.normalize(C3.subtract(point, closest_sphere.center))
+      let i = this.computeLighting(point, n)
+      return colorByScalar(closest_sphere.color, i)
     }
   }
 
@@ -149,13 +253,18 @@ class Matrix4 {
     return [t1, t2]
   }
 
+  updateCanvas() {
+    this.context.putImageData(this.canvasBuffer, 0, 0)
+  }
+
   render(){
-    for(let x = -this.cw / 2; x <= this.cw / 2; x++) {
-      for(let y = -this.ch / 2; y <= this.ch / 2; y++) {
+    for(let x = -this.cw / 2; x < this.cw / 2; x++) {
+      for(let y = -this.ch / 2; y < this.ch / 2; y++) {
         let direction: C3 = this.canvasToViewport(x, y)
         let color = this.traceRay(direction)
         this.putPixel(x, y, color)
       }
     }
+    this.updateCanvas()
   }
 }
