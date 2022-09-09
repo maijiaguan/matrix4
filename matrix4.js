@@ -79,17 +79,21 @@ function color(hex) {
 }
 function colorByScalar(color, scalar) {
     var new_color = [];
-    new_color[0] = color[0] * scalar;
-    new_color[1] = color[1] * scalar;
-    new_color[2] = color[2] * scalar;
-    new_color[3] = color[3];
+    new_color[0] = clamp(color[0] * scalar);
+    new_color[1] = clamp(color[1] * scalar);
+    new_color[2] = clamp(color[2] * scalar);
+    new_color[3] = clamp(color[3]);
     return new_color;
 }
+function clamp(value) {
+    return Math.min(255, Math.max(0, value));
+}
 var Sphere = /** @class */ (function () {
-    function Sphere(center, radius, color) {
+    function Sphere(center, radius, color, specular) {
         this.center = center;
         this.radius = radius;
         this.color = color;
+        this.specular = specular;
     }
     return Sphere;
 }());
@@ -114,10 +118,10 @@ var Matrix4 = /** @class */ (function () {
         this.vh = 1.0;
         this.d = 1.0;
         this.scene = [
-            new Sphere(new C3(0, -1, 3), 1, color('#ff0000')),
-            new Sphere(new C3(2, 0, 4), 1, color('#0000ff')),
-            new Sphere(new C3(-2, 0, 4), 1, color('#00ff00')),
-            new Sphere(new C3(0, -5001, 0), 5000, color('#ffff00'))
+            new Sphere(new C3(0, -1, 3), 1, color('#ff0000'), 500),
+            new Sphere(new C3(2, 0, 4), 1, color('#0000ff'), 500),
+            new Sphere(new C3(-2, 0, 4), 1, color('#00ff00'), 10),
+            new Sphere(new C3(0, -5001, 0), 5000, color('#ffff00'), 1000)
         ];
         this.light = [
             {
@@ -163,7 +167,7 @@ var Matrix4 = /** @class */ (function () {
         this.canvasBuffer.data[offset++] = color[2]; // b
         this.canvasBuffer.data[offset++] = color[3]; // alpha
     };
-    Matrix4.prototype.computeLighting = function (point, n) {
+    Matrix4.prototype.computeLighting = function (point, n, v, specular) {
         var i = 0.0;
         this.light.forEach(function (light) {
             if (light.type === "ambient") {
@@ -178,8 +182,17 @@ var Matrix4 = /** @class */ (function () {
                     l = light.direction;
                 }
                 var cos_a = C3.dot(n, l);
+                // diffuse
                 if (cos_a > 0) {
                     i += light.intensity * cos_a / (C3.magnitude(n) * C3.magnitude(l));
+                }
+                // specular
+                if (specular !== -1) {
+                    var reflex = C3.subtract(C3.multiplyByScalar(n, 2 * C3.dot(n, l)), l);
+                    var cos_a_2 = C3.dot(reflex, v);
+                    if (cos_a_2 > 0) {
+                        i += light.intensity * Math.pow((cos_a_2 / (C3.magnitude(reflex) * C3.magnitude(v))), specular);
+                    }
                 }
             }
         });
@@ -211,7 +224,7 @@ var Matrix4 = /** @class */ (function () {
         else {
             var point = C3.add(this.cameraPosition, C3.multiplyByScalar(direction, closest_t));
             var n = C3.normalize(C3.subtract(point, closest_sphere.center));
-            var i = this.computeLighting(point, n);
+            var i = this.computeLighting(point, n, C3.multiplyByScalar(direction, -1), closest_sphere.specular);
             return colorByScalar(closest_sphere.color, i);
         }
     };
